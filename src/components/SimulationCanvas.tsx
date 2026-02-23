@@ -38,6 +38,8 @@ interface SimulationCanvasProps {
   injectionAnimations?: InjectionAnimation[];
   designedCreatureTimestamps?: Map<string, number>;
   highlightBiomeType?: number | null;
+  selectedCreatureId?: string | null;
+  onCreatureClick?: (id: string | null) => void;
 }
 
 function drawBiomeTile(
@@ -361,6 +363,8 @@ export function SimulationCanvas({
   injectionAnimations,
   designedCreatureTimestamps,
   highlightBiomeType,
+  selectedCreatureId,
+  onCreatureClick,
 }: SimulationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -415,13 +419,39 @@ export function SimulationCanvas({
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (e.button !== 0 || selectedBiome === null) return;
-      isPaintingRef.current = true;
+      if (e.button !== 0) return;
       const coords = canvasToGrid(e.clientX, e.clientY);
       if (!coords) return;
-      worldRef.current?.paintBiome(coords.gridX, coords.gridY, brushSize, selectedBiome);
+
+      if (selectedBiome !== null) {
+        isPaintingRef.current = true;
+        worldRef.current?.paintBiome(coords.gridX, coords.gridY, brushSize, selectedBiome);
+        return;
+      }
+
+      // Creature click detection
+      if (!onCreatureClick) return;
+      const world = worldRef.current;
+      if (!world) return;
+
+      const SNAP_RADIUS_SQ = 15 * 15;
+      let nearestId: string | null = null;
+      let nearestDistSq = SNAP_RADIUS_SQ;
+
+      for (const creature of world.creatures.values()) {
+        if (creature.dead) continue;
+        const dx = creature.position.x - coords.worldX;
+        const dy = creature.position.y - coords.worldY;
+        const distSq = dx * dx + dy * dy;
+        if (distSq <= nearestDistSq) {
+          nearestDistSq = distSq;
+          nearestId = creature.id;
+        }
+      }
+
+      onCreatureClick(nearestId);
     },
-    [selectedBiome, brushSize, worldRef, canvasToGrid]
+    [selectedBiome, brushSize, worldRef, canvasToGrid, onCreatureClick]
   );
 
   const handleMouseMove = useCallback(
@@ -592,6 +622,20 @@ export function SimulationCanvas({
         ctx.stroke();
       }
 
+      // Pulsing halo for inspector-selected creature (1Hz, 3px)
+      if (selectedCreatureId === creature.id) {
+        const t = nowRef.current / 1000;
+        const pulse = (Math.sin(t * Math.PI * 2) + 1) / 2;
+        ctx.strokeStyle = `rgba(255,255,255,${(0.38 + pulse * 0.62).toFixed(2)})`;
+        ctx.lineWidth = 3 / scale;
+        ctx.shadowColor = 'rgba(255,255,255,0.55)';
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(x, y, creature.radius + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
       // Designed creature DNA marker (visible 10s)
       if (designedCreatureTimestamps) {
         const injectedAt = designedCreatureTimestamps.get(creature.id);
@@ -630,7 +674,7 @@ export function SimulationCanvas({
     }
 
     ctx.restore();
-  }, [worldRef, selectedSpeciesId, extinctionFlash, showMigrationFlow, radiationBursts, injectionAnimations, designedCreatureTimestamps, highlightBiomeType]);
+  }, [worldRef, selectedSpeciesId, extinctionFlash, showMigrationFlow, radiationBursts, injectionAnimations, designedCreatureTimestamps, highlightBiomeType, selectedCreatureId]);
 
   // Attach draw to rAF
   useEffect(() => {

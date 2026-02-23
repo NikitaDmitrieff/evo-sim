@@ -68,6 +68,17 @@ export class Creature {
   // Designer tracking
   isDesigned: boolean;
 
+  // Behavior tracking
+  currentBehavior: 'wandering' | 'fleeing' | 'hunting' | 'foraging';
+  behaviorTargetSpecies: string | null;
+
+  // Stats tracking
+  foodEaten: number;
+  killCount: number;
+  birthTick: number;
+  offspringCount: number;
+  parentSpeciesId: string | null;
+
   constructor(
     genome: Genome,
     position: { x: number; y: number },
@@ -96,6 +107,13 @@ export class Creature {
     this.biomeHistory = [];
     this.biomeResidencyTicks = 0;
     this.isDesigned = false;
+    this.currentBehavior = 'wandering';
+    this.behaviorTargetSpecies = null;
+    this.foodEaten = 0;
+    this.killCount = 0;
+    this.birthTick = 0;
+    this.offspringCount = 0;
+    this.parentSpeciesId = null;
   }
 
   update(world: WorldInterface): Creature | null {
@@ -135,6 +153,8 @@ export class Creature {
           (closest.position.y - this.position.y) ** 2;
         return d1 < d2 ? c : closest;
       });
+      this.currentBehavior = 'fleeing';
+      this.behaviorTargetSpecies = threat.speciesId;
       const dx = this.position.x - threat.position.x;
       const dy = this.position.y - threat.position.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -157,6 +177,8 @@ export class Creature {
             (closest.position.y - this.position.y) ** 2;
           return d1 < d2 ? c : closest;
         });
+        this.currentBehavior = 'hunting';
+        this.behaviorTargetSpecies = prey.speciesId;
         const dx = prey.position.x - this.position.x;
         const dy = prey.position.y - this.position.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -170,16 +192,23 @@ export class Creature {
             this.energy += 18;
             if (prey.energy <= 0) {
               prey.dead = true;
+              this.killCount++;
               world.spawnFoodAt(prey.position.x, prey.position.y, 20);
             }
           }
         }
       } else if (food.length > 0) {
+        this.currentBehavior = 'foraging';
+        this.behaviorTargetSpecies = null;
         this.steerToward(food[0].x, food[0].y, effectiveSpeed);
       } else {
+        this.currentBehavior = 'wandering';
+        this.behaviorTargetSpecies = null;
         this.wander(effectiveSpeed);
       }
     } else if (food.length > 0) {
+      this.currentBehavior = 'foraging';
+      this.behaviorTargetSpecies = null;
       // Seek nearest food
       const nearest = food.reduce((closest, f) => {
         const d1 =
@@ -191,6 +220,8 @@ export class Creature {
       });
       this.steerToward(nearest.x, nearest.y, effectiveSpeed);
     } else {
+      this.currentBehavior = 'wandering';
+      this.behaviorTargetSpecies = null;
       this.wander(effectiveSpeed);
     }
 
@@ -237,6 +268,7 @@ export class Creature {
     // Consume food pellets
     world.consumeFoodAt(this.position, this.radius + 2, (energy) => {
       this.energy = Math.min(100, this.energy + energy);
+      this.foodEaten++;
     });
 
     // Metabolic cost scaled by biome move_cost
@@ -256,6 +288,7 @@ export class Creature {
     // Reproduce
     if (this.energy > 80 && Math.random() < 0.008) {
       this.energy -= 40;
+      this.offspringCount++;
       const mateOptions = nearby.filter(
         (c) => c.speciesId === this.speciesId && !c.dead
       );
@@ -292,6 +325,7 @@ export class Creature {
         this.id
       );
       child.speciesId = this.speciesId;
+      child.parentSpeciesId = this.speciesId;
       if (this.isDesigned) child.isDesigned = true;
       return child;
     }

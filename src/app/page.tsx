@@ -13,6 +13,8 @@ import { BIOME_NAMES, BIOMES, BIOME_COUNT, GRID_COLS, GRID_ROWS, CELL_SIZE } fro
 import { AdaptiveRadiationEvent } from '../lib/simulation/world';
 import { InjectionAnimation } from '../components/SimulationCanvas';
 import { getColor } from '../lib/simulation/genome';
+import { CreatureInspector } from '../components/CreatureInspector';
+import { Creature } from '../lib/simulation/creature';
 
 interface RadiationBurst {
   x: number;
@@ -47,6 +49,32 @@ export default function Home() {
   const [selectedSpeciesId, setSelectedSpeciesId] = useState<string | null>(null);
   const [extinctionFlash, setExtinctionFlash] = useState(false);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [selectedCreatureId, setSelectedCreatureId] = useState<string | null>(null);
+  const [selectedCreature, setSelectedCreature] = useState<Creature | null>(null);
+
+  // Unified setter so both state values stay in sync without setState in effect body
+  const handleSelectCreature = useCallback((id: string | null) => {
+    setSelectedCreatureId(id);
+    setSelectedCreature(id ? (worldRef.current?.creatures.get(id) ?? null) : null);
+  }, [worldRef]);
+
+  // Auto-close inspector when selected creature dies or leaves the world
+  useEffect(() => {
+    if (!selectedCreatureId) return;
+    const interval = setInterval(() => {
+      const world = worldRef.current;
+      if (!world) return;
+      const creature = world.creatures.get(selectedCreatureId) ?? null;
+      if (!creature) {
+        setSelectedCreatureId(null);
+        setSelectedCreature(null);
+      } else {
+        setSelectedCreature(creature);
+      }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [selectedCreatureId, worldRef]);
 
   // Biome painter state
   const [selectedBiome, setSelectedBiome] = useState<number | null>(null);
@@ -259,6 +287,8 @@ export default function Home() {
             injectionAnimations={injectionAnimations}
             designedCreatureTimestamps={designedCreatureTimestamps}
             highlightBiomeType={highlightBiomeType}
+            selectedCreatureId={selectedCreatureId}
+            onCreatureClick={handleSelectCreature}
           />
 
           {/* Biome Painter toolbar */}
@@ -340,6 +370,18 @@ export default function Home() {
               <span className="text-white">{BIOME_NAMES[selectedBiome]}</span>
               <span className="text-gray-500 ml-2">r={brushSize}</span>
             </div>
+          )}
+
+          {/* Creature Inspector panel */}
+          {selectedCreature && (
+            <CreatureInspector
+              creature={selectedCreature}
+              speciesLabel={speciesLabels.get(selectedCreature.speciesId) ?? selectedCreature.speciesId}
+              speciesColor={speciesColors.get(selectedCreature.speciesId) ?? 'hsl(200, 60%, 45%)'}
+              worldRef={worldRef}
+              onClose={() => handleSelectCreature(null)}
+              speciesLabels={speciesLabels}
+            />
           )}
         </div>
 
