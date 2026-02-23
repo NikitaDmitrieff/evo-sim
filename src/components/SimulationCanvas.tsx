@@ -1,22 +1,269 @@
 'use client';
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { World } from '../lib/simulation/world';
 import { getColor } from '../lib/simulation/genome';
+import {
+  BIOME_NAMES,
+  CELL_SIZE,
+  GRID_COLS,
+  GRID_ROWS,
+} from '../lib/simulation/biome';
+
+
+interface RadiationBurst {
+  x: number;
+  y: number;
+  startTime: number;
+  biomeType: number;
+  colors: string[];
+}
 
 interface SimulationCanvasProps {
   worldRef: React.RefObject<World | null>;
   selectedSpeciesId: string | null;
   extinctionFlash: boolean;
+  selectedBiome: number | null;
+  brushSize: number;
+  showMigrationFlow: boolean;
+  radiationBursts: RadiationBurst[];
+}
+
+function drawBiomeTile(
+  ctx: CanvasRenderingContext2D,
+  gx: number,
+  gy: number,
+  biomeType: number,
+  tick: number
+) {
+  const px = gx * CELL_SIZE;
+  const py = gy * CELL_SIZE;
+
+  switch (biomeType) {
+    case 1: { // Dense Forest
+      ctx.fillStyle = 'rgba(34,85,34,0.35)';
+      ctx.fillRect(px, py, CELL_SIZE, CELL_SIZE);
+      // Subtle noise texture
+      ctx.fillStyle = 'rgba(20,60,20,0.15)';
+      const s1 = (gx * 7 + gy * 13) >>> 0;
+      for (let i = 0; i < 3; i++) {
+        const nx = px + ((s1 * (i + 1) * 17) % CELL_SIZE);
+        const ny = py + ((s1 * (i + 1) * 23) % CELL_SIZE);
+        ctx.fillRect(nx, ny, 1.5, 1.5);
+      }
+      break;
+    }
+    case 2: { // Desert
+      ctx.fillStyle = 'rgba(210,180,100,0.35)';
+      ctx.fillRect(px, py, CELL_SIZE, CELL_SIZE);
+      // Stippled dots
+      ctx.fillStyle = 'rgba(180,150,70,0.3)';
+      const s2 = (gx * 11 + gy * 17) >>> 0;
+      for (let i = 0; i < 2; i++) {
+        const nx = px + ((s2 * (i + 1) * 19) % CELL_SIZE);
+        const ny = py + ((s2 * (i + 1) * 29) % CELL_SIZE);
+        ctx.beginPath();
+        ctx.arc(nx, ny, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+    case 3: { // Deep Ocean — wave shimmer
+      const shimmer = Math.sin(tick * 0.05 + gx * 0.3 + gy * 0.3) * 0.1 + 0.4;
+      ctx.fillStyle = `rgba(20,80,180,${shimmer.toFixed(2)})`;
+      ctx.fillRect(px, py, CELL_SIZE, CELL_SIZE);
+      break;
+    }
+    case 4: { // Arctic Tundra
+      ctx.fillStyle = 'rgba(200,220,240,0.45)';
+      ctx.fillRect(px, py, CELL_SIZE, CELL_SIZE);
+      // Snowflake particles
+      const snowPhase = Math.floor(tick / 10);
+      const s4 = (gx * 3 + gy * 7 + snowPhase) >>> 0;
+      if (s4 % 5 === 0) {
+        const sx = px + ((s4 * 13) % CELL_SIZE);
+        const sy = py + ((s4 * 17) % CELL_SIZE);
+        ctx.strokeStyle = 'rgba(220,235,255,0.6)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(sx - 2, sy);
+        ctx.lineTo(sx + 2, sy);
+        ctx.moveTo(sx, sy - 2);
+        ctx.lineTo(sx, sy + 2);
+        ctx.stroke();
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function drawBiomeLayer(
+  ctx: CanvasRenderingContext2D,
+  biomeGrid: Uint8Array,
+  tick: number
+) {
+  for (let gy = 0; gy < GRID_ROWS; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      const biomeType = biomeGrid[gy * GRID_COLS + gx];
+      if (biomeType === 0) continue; // Savanna is default background
+      drawBiomeTile(ctx, gx, gy, biomeType, tick);
+    }
+  }
+
+  // Biome borders — batch all line segments
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let gy = 0; gy < GRID_ROWS; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      const current = biomeGrid[gy * GRID_COLS + gx];
+      const px = gx * CELL_SIZE;
+      const py = gy * CELL_SIZE;
+
+      if (gx < GRID_COLS - 1) {
+        const right = biomeGrid[gy * GRID_COLS + gx + 1];
+        if (right !== current) {
+          ctx.moveTo(px + CELL_SIZE, py);
+          ctx.lineTo(px + CELL_SIZE, py + CELL_SIZE);
+        }
+      }
+      if (gy < GRID_ROWS - 1) {
+        const below = biomeGrid[(gy + 1) * GRID_COLS + gx];
+        if (below !== current) {
+          ctx.moveTo(px, py + CELL_SIZE);
+          ctx.lineTo(px + CELL_SIZE, py + CELL_SIZE);
+        }
+      }
+    }
+  }
+  ctx.stroke();
+}
+
+function drawMigrationFlow(
+  ctx: CanvasRenderingContext2D,
+  biomeGrid: Uint8Array,
+  migrationLog: Map<string, number>
+) {
+  if (migrationLog.size === 0) return;
+
+  // Compute biome centroids
+  const centroidSums = new Map<number, { sx: number; sy: number; count: number }>();
+  for (let gy = 0; gy < GRID_ROWS; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      const id = biomeGrid[gy * GRID_COLS + gx];
+      const cur = centroidSums.get(id) ?? { sx: 0, sy: 0, count: 0 };
+      cur.sx += gx * CELL_SIZE + CELL_SIZE / 2;
+      cur.sy += gy * CELL_SIZE + CELL_SIZE / 2;
+      cur.count++;
+      centroidSums.set(id, cur);
+    }
+  }
+  const centroids = new Map<number, { x: number; y: number }>();
+  for (const [id, { sx, sy, count }] of centroidSums.entries()) {
+    if (count > 0) centroids.set(id, { x: sx / count, y: sy / count });
+  }
+
+  // Find max flow for scaling
+  let maxFlow = 0;
+  for (const count of migrationLog.values()) {
+    if (count > maxFlow) maxFlow = count;
+  }
+  if (maxFlow === 0) return;
+
+  for (const [key, count] of migrationLog.entries()) {
+    const parts = key.split('→');
+    if (parts.length !== 2) continue;
+    const fromId = parseInt(parts[0]);
+    const toId = parseInt(parts[1]);
+    const from = centroids.get(fromId);
+    const to = centroids.get(toId);
+    if (!from || !to) continue;
+
+    const thickness = 1 + (count / maxFlow) * 5;
+    const alpha = 0.3 + (count / maxFlow) * 0.4;
+
+    ctx.strokeStyle = `rgba(255,220,100,${alpha.toFixed(2)})`;
+    ctx.lineWidth = thickness;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+
+    // Arrowhead
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const angle = Math.atan2(dy, dx);
+    const headLen = 8 + thickness;
+    ctx.fillStyle = `rgba(255,220,100,${alpha.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.moveTo(to.x, to.y);
+    ctx.lineTo(
+      to.x - headLen * Math.cos(angle - Math.PI / 6),
+      to.y - headLen * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.lineTo(
+      to.x - headLen * Math.cos(angle + Math.PI / 6),
+      to.y - headLen * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawRadiationBursts(
+  ctx: CanvasRenderingContext2D,
+  bursts: RadiationBurst[],
+  now: number
+) {
+  const DURATION = 2000;
+  for (const burst of bursts) {
+    const elapsed = now - burst.startTime;
+    if (elapsed > DURATION) continue;
+    const progress = elapsed / DURATION;
+
+    for (let ring = 0; ring < 3; ring++) {
+      const ringProgress = Math.max(0, progress - ring * 0.15);
+      if (ringProgress <= 0) continue;
+      const radius = ringProgress * 180;
+      const alpha = (1 - ringProgress) * 0.5;
+      const color = burst.colors[ring % burst.colors.length] ?? 'rgba(255,200,50,0.4)';
+
+      ctx.strokeStyle = color.replace('hsl', 'hsla').replace(')', `, ${alpha.toFixed(2)})`);
+      if (!color.startsWith('hsl')) {
+        ctx.strokeStyle = `rgba(255,200,80,${alpha.toFixed(2)})`;
+      }
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(burst.x, burst.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
 }
 
 export function SimulationCanvas({
   worldRef,
   selectedSpeciesId,
   extinctionFlash,
+  selectedBiome,
+  brushSize,
+  showMigrationFlow,
+  radiationBursts,
 }: SimulationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scaleRef = useRef(1);
+  const offsetXRef = useRef(0);
+  const offsetYRef = useRef(0);
+  const isPaintingRef = useRef(false);
+  const nowRef = useRef(0);
+
+  const [biomeTooltip, setBiomeTooltip] = useState<{
+    x: number;
+    y: number;
+    biomeId: number;
+  } | null>(null);
 
   // Resize canvas to container
   useEffect(() => {
@@ -32,12 +279,77 @@ export function SimulationCanvas({
       }
     });
     observer.observe(container);
-    // Initial size
     canvas.width = container.clientWidth;
     canvas.height = container.clientHeight;
 
     return () => observer.disconnect();
   }, []);
+
+  // Convert canvas pixel coords to world grid coords
+  const canvasToGrid = useCallback(
+    (clientX: number, clientY: number): { gridX: number; gridY: number; worldX: number; worldY: number } | null => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+      const worldX = (cx - offsetXRef.current) / scaleRef.current;
+      const worldY = (cy - offsetYRef.current) / scaleRef.current;
+      const gridX = Math.floor(worldX / CELL_SIZE);
+      const gridY = Math.floor(worldY / CELL_SIZE);
+      return { gridX, gridY, worldX, worldY };
+    },
+    []
+  );
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0 || selectedBiome === null) return;
+      isPaintingRef.current = true;
+      const coords = canvasToGrid(e.clientX, e.clientY);
+      if (!coords) return;
+      worldRef.current?.paintBiome(coords.gridX, coords.gridY, brushSize, selectedBiome);
+    },
+    [selectedBiome, brushSize, worldRef, canvasToGrid]
+  );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isPaintingRef.current || selectedBiome === null) return;
+      const coords = canvasToGrid(e.clientX, e.clientY);
+      if (!coords) return;
+      worldRef.current?.paintBiome(coords.gridX, coords.gridY, brushSize, selectedBiome);
+    },
+    [selectedBiome, brushSize, worldRef, canvasToGrid]
+  );
+
+  const handleMouseUp = useCallback(() => {
+    isPaintingRef.current = false;
+  }, []);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const coords = canvasToGrid(e.clientX, e.clientY);
+      if (!coords) return;
+      const world = worldRef.current;
+      if (!world) return;
+      const biomeId = world.getBiomeId(
+        Math.max(0, Math.min(GRID_COLS - 1, coords.gridX)),
+        Math.max(0, Math.min(GRID_ROWS - 1, coords.gridY))
+      );
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      setBiomeTooltip({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        biomeId,
+      });
+      setTimeout(() => setBiomeTooltip(null), 2000);
+    },
+    [worldRef, canvasToGrid]
+  );
 
   // Draw loop
   const draw = useCallback(() => {
@@ -49,15 +361,21 @@ export function SimulationCanvas({
     const world = worldRef.current;
     if (!world) return;
 
+    nowRef.current = Date.now();
+
     const cw = canvas.width;
     const ch = canvas.height;
 
-    // Scale factor: world is 1200x800, canvas may differ
     const scaleX = cw / world.width;
     const scaleY = ch / world.height;
     const scale = Math.min(scaleX, scaleY);
     const offsetX = (cw - world.width * scale) / 2;
     const offsetY = (ch - world.height * scale) / 2;
+
+    // Update refs for mouse coord conversion
+    scaleRef.current = scale;
+    offsetXRef.current = offsetX;
+    offsetYRef.current = offsetY;
 
     ctx.save();
     ctx.clearRect(0, 0, cw, ch);
@@ -79,6 +397,14 @@ export function SimulationCanvas({
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
 
+    // Draw biome layer
+    drawBiomeLayer(ctx, world.biomeGrid, world.tick);
+
+    // Migration flow overlay
+    if (showMigrationFlow) {
+      drawMigrationFlow(ctx, world.biomeGrid, world.migrationLog);
+    }
+
     // Draw food pellets
     ctx.fillStyle = '#3a7d44';
     for (const food of world.foodPellets) {
@@ -99,7 +425,6 @@ export function SimulationCanvas({
       if (creature.dead) continue;
       const { x, y } = creature.position;
 
-      // Skip if outside viewport
       if (x + creature.radius < 0 || x - creature.radius > world.width) continue;
       if (y + creature.radius < 0 || y - creature.radius > world.height) continue;
 
@@ -111,18 +436,15 @@ export function SimulationCanvas({
         selectedSpeciesId !== null &&
         creature.speciesId === selectedSpeciesId;
 
-      // Shadow for predators
       if (isPredator) {
         ctx.shadowColor = 'rgba(255,40,40,0.5)';
         ctx.shadowBlur = 6;
       }
 
-      // Fill circle
       ctx.beginPath();
       ctx.arc(x, y, creature.radius, 0, Math.PI * 2);
 
       if (isPredator) {
-        // Slightly reddish/darker for predators
         const h = creature.genome[4] * 360;
         const s = 50 + creature.genome[5] * 40;
         ctx.fillStyle = `hsl(${(h * 0.3 + 0 * 0.7).toFixed(0)}, ${(s * 0.7).toFixed(0)}%, 35%)`;
@@ -131,7 +453,6 @@ export function SimulationCanvas({
       }
       ctx.fill();
 
-      // Selection ring (white) for selected species
       if (isSelected) {
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
@@ -140,21 +461,31 @@ export function SimulationCanvas({
         ctx.stroke();
       }
 
-      // Energy bar (thin arc overlay for low energy)
       if (creature.energy < 30) {
         ctx.strokeStyle = `rgba(255,200,0,${1 - creature.energy / 30})`;
         ctx.lineWidth = 1.5;
         ctx.shadowBlur = 0;
         ctx.beginPath();
-        ctx.arc(x, y, creature.radius + 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (creature.energy / 30));
+        ctx.arc(
+          x,
+          y,
+          creature.radius + 3,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * (creature.energy / 30)
+        );
         ctx.stroke();
       }
 
       ctx.restore();
     }
 
+    // Draw radiation bursts
+    if (radiationBursts.length > 0) {
+      drawRadiationBursts(ctx, radiationBursts, nowRef.current);
+    }
+
     ctx.restore();
-  }, [worldRef, selectedSpeciesId, extinctionFlash]);
+  }, [worldRef, selectedSpeciesId, extinctionFlash, showMigrationFlow, radiationBursts]);
 
   // Attach draw to rAF
   useEffect(() => {
@@ -167,9 +498,35 @@ export function SimulationCanvas({
     return () => cancelAnimationFrame(rafId);
   }, [draw]);
 
+  const cursor =
+    selectedBiome !== null
+      ? 'crosshair'
+      : 'default';
+
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-[#0d1117]">
-      <canvas ref={canvasRef} className="absolute inset-0" />
+    <div
+      ref={containerRef}
+      className="relative w-full h-full overflow-hidden bg-[#0d1117]"
+      style={{ cursor }}
+    >
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onContextMenu={handleContextMenu}
+      />
+      {/* Biome info tooltip */}
+      {biomeTooltip && (
+        <div
+          className="absolute z-20 bg-black/80 border border-gray-600 rounded px-2 py-1 text-xs text-gray-200 pointer-events-none font-mono"
+          style={{ left: biomeTooltip.x + 8, top: biomeTooltip.y - 24 }}
+        >
+          {BIOME_NAMES[biomeTooltip.biomeId]}
+        </div>
+      )}
     </div>
   );
 }

@@ -10,6 +10,7 @@ export interface PhyloNode {
   extinctAt: number | null;
   label: string;
   color: string;
+  isAllopatric: boolean;
   children: PhyloNode[];
 }
 
@@ -25,8 +26,8 @@ interface PhyloTreeProps {
 
 interface LayoutNode {
   node: PhyloNode;
-  x: number; // 0..1 normalized
-  y: number; // 0..1 normalized (0 = top = old, 1 = bottom = present)
+  x: number;
+  y: number;
   depth: number;
 }
 
@@ -41,7 +42,6 @@ function buildTree(
 
   const nodeMap = new Map<string, PhyloNode>();
 
-  // Root
   const root: PhyloNode = {
     id: 'primordial',
     parentId: null,
@@ -49,6 +49,7 @@ function buildTree(
     extinctAt: extinctMap.get('primordial') ?? null,
     label: speciesLabels.get('primordial') ?? 'Primordial',
     color: speciesColors.get('primordial') ?? '#4ade80',
+    isAllopatric: false,
     children: [],
   };
   nodeMap.set('primordial', root);
@@ -63,12 +64,12 @@ function buildTree(
         speciesLabels.get(event.childSpeciesId) ??
         event.childSpeciesId,
       color: event.color,
+      isAllopatric: event.isAllopatric,
       children: [],
     };
     nodeMap.set(event.childSpeciesId, child);
   }
 
-  // Link children
   for (const [id, node] of nodeMap.entries()) {
     if (id === 'primordial') continue;
     const parent = nodeMap.get(node.parentId ?? 'primordial');
@@ -77,7 +78,6 @@ function buildTree(
     }
   }
 
-  // Update colors from map (may have been updated after event)
   for (const [id, node] of nodeMap.entries()) {
     const c = speciesColors.get(id);
     if (c) node.color = c;
@@ -140,8 +140,7 @@ function layoutTree(
   return result;
 }
 
-// Animation tracking for new branches
-const NEW_BRANCH_DURATION = 600; // ms
+const NEW_BRANCH_DURATION = 600;
 
 export function PhyloTree({
   speciationEvents,
@@ -157,7 +156,6 @@ export function PhyloTree({
   const [newBranchTimestamps, setNewBranchTimestamps] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(() => Date.now());
 
-  // Track new branches for animation
   useEffect(() => {
     if (speciationEvents.length === 0) return;
     const last = speciationEvents[speciationEvents.length - 1];
@@ -169,7 +167,6 @@ export function PhyloTree({
     });
   }, [speciationEvents.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Resize observer
   useEffect(() => {
     const svg = svgRef.current?.parentElement;
     if (!svg) return;
@@ -185,7 +182,6 @@ export function PhyloTree({
     return () => observer.disconnect();
   }, []);
 
-  // Pulse animation frame
   useEffect(() => {
     let id: number;
     function tick() {
@@ -225,7 +221,6 @@ export function PhyloTree({
     return PAD.top + ny * innerH;
   }
 
-  // Build edge list
   const edges: Array<{
     x1: number;
     y1: number;
@@ -237,6 +232,7 @@ export function PhyloTree({
     isNew: boolean;
     color: string;
     isExtinct: boolean;
+    isAllopatric: boolean;
   }> = [];
 
   const nodeById = new Map(layoutNodes.map((ln) => [ln.node.id, ln]));
@@ -261,6 +257,7 @@ export function PhyloTree({
       isNew,
       color: ln.node.color,
       isExtinct,
+      isAllopatric: ln.node.isAllopatric,
     });
   }
 
@@ -273,7 +270,6 @@ export function PhyloTree({
       style={{ fontFamily: 'inherit' }}
     >
       <defs>
-        {/* Pulse animation for living nodes */}
         <style>{`
           @keyframes phylo-pulse {
             0%, 100% { opacity: 1; r: 6px; }
@@ -285,7 +281,6 @@ export function PhyloTree({
         `}</style>
       </defs>
 
-      {/* Y-axis label */}
       <text
         x={PAD.left}
         y={PAD.top - 12}
@@ -312,7 +307,6 @@ export function PhyloTree({
           ? Math.min(1, (now - (newBranchTimestamps.get(e.childId) ?? 0)) / NEW_BRANCH_DURATION)
           : 1;
 
-        // Cubic bezier: go down from parent, then arc to child x
         const cx1 = e.x1;
         const cy1 = e.y1 + (e.y2 - e.y1) * 0.5;
         const cx2 = e.x2;
@@ -320,22 +314,50 @@ export function PhyloTree({
 
         const pathD = `M ${e.x1} ${e.y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${e.x2} ${e.y2}`;
 
+        // Midpoint for the allopatric icon
+        const midX = (e.x1 + e.x2) / 2;
+        const midY = (e.y1 + e.y2) / 2;
+
         return (
-          <path
-            key={e.childId}
-            d={pathD}
-            fill="none"
-            stroke={e.isExtinct ? '#374151' : e.color}
-            strokeWidth={1.5}
-            strokeOpacity={e.isExtinct ? 0.4 : 0.85}
-            strokeDasharray={e.isNew ? `${totalLen * progress} ${totalLen}` : undefined}
-            strokeDashoffset={e.isNew ? 0 : undefined}
-            style={
-              e.isNew
-                ? { transition: `stroke-dasharray ${NEW_BRANCH_DURATION}ms linear` }
-                : {}
-            }
-          />
+          <g key={e.childId}>
+            <path
+              d={pathD}
+              fill="none"
+              stroke={e.isExtinct ? '#374151' : e.color}
+              strokeWidth={e.isAllopatric ? 2 : 1.5}
+              strokeOpacity={e.isExtinct ? 0.4 : 0.85}
+              strokeDasharray={
+                e.isNew ? `${totalLen * progress} ${totalLen}` : undefined
+              }
+              strokeDashoffset={e.isNew ? 0 : undefined}
+              style={
+                e.isNew
+                  ? { transition: `stroke-dasharray ${NEW_BRANCH_DURATION}ms linear` }
+                  : {}
+              }
+            />
+            {/* Allopatric speciation icon — geographic split */}
+            {e.isAllopatric && !e.isExtinct && (
+              <g transform={`translate(${midX}, ${midY})`}>
+                <circle r={5} fill="#0d1117" stroke={e.color} strokeWidth={1} opacity={0.9} />
+                {/* Two-mountain split icon */}
+                <path
+                  d="M-3.5,2.5 L-1,−1.5 L1.5,2.5"
+                  fill="none"
+                  stroke={e.color}
+                  strokeWidth={0.8}
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M0,2.5 L2,−1.5 L4,2.5"
+                  fill="none"
+                  stroke={e.color}
+                  strokeWidth={0.8}
+                  strokeLinejoin="round"
+                />
+              </g>
+            )}
+          </g>
         );
       })}
 
@@ -347,7 +369,6 @@ export function PhyloTree({
         const isSelected = selectedSpeciesId === ln.node.id;
         const isExtinct = !isLiving;
 
-        // Pulse offset for living nodes
         const pulsePhase = (now / 2000) * Math.PI * 2;
         const pulseR = isLiving && !isExtinct ? 6 + Math.sin(pulsePhase) * 2 : 5;
 
@@ -361,7 +382,6 @@ export function PhyloTree({
             }
             style={{ cursor: 'pointer' }}
           >
-            {/* Selection ring */}
             {isSelected && (
               <circle
                 cx={cx}
@@ -374,7 +394,6 @@ export function PhyloTree({
               />
             )}
 
-            {/* Node circle */}
             <circle
               cx={cx}
               cy={cy}
@@ -385,7 +404,6 @@ export function PhyloTree({
               strokeWidth={1}
             />
 
-            {/* Label */}
             <text
               x={cx}
               y={cy - pulseR - 4}
