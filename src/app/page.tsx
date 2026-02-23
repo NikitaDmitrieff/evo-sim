@@ -5,6 +5,8 @@ import { useSimulation } from '../hooks/useSimulation';
 import { SimulationCanvas } from '../components/SimulationCanvas';
 import { PhyloTree } from '../components/PhyloTree';
 import { GodPanel } from '../components/GodPanel';
+import { useSoundscape } from '../hooks/useSoundscape';
+import { AudioPanel } from '../components/AudioPanel';
 
 export default function Home() {
   const {
@@ -20,6 +22,12 @@ export default function Home() {
     togglePause,
     setSpeed,
   } = useSimulation();
+
+  const soundscapeControls = useSoundscape({
+    worldRef,
+    speciationEvents,
+    tick: stats.tick,
+  });
 
   const [selectedSpeciesId, setSelectedSpeciesId] = useState<string | null>(null);
   const [extinctionFlash, setExtinctionFlash] = useState(false);
@@ -51,6 +59,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col w-screen h-screen bg-[#0d1117] overflow-hidden">
+      <AudioPanel controls={soundscapeControls} />
       {/* Main panels */}
       <div className="flex flex-1 min-h-0">
         {/* Left 70%: Simulation Canvas */}
