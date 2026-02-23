@@ -6,10 +6,13 @@ import { SimulationCanvas } from '../components/SimulationCanvas';
 import { PhyloTree } from '../components/PhyloTree';
 import { GodPanel } from '../components/GodPanel';
 import { BiomePainter } from '../components/BiomePainter';
+import { CreatureGenesis } from '../components/CreatureGenesis';
 import { useSoundscape } from '../hooks/useSoundscape';
 import { AudioPanel } from '../components/AudioPanel';
-import { BIOME_NAMES } from '../lib/simulation/biome';
+import { BIOME_NAMES, BIOMES, BIOME_COUNT, GRID_COLS, GRID_ROWS, CELL_SIZE } from '../lib/simulation/biome';
 import { AdaptiveRadiationEvent } from '../lib/simulation/world';
+import { InjectionAnimation } from '../components/SimulationCanvas';
+import { getColor } from '../lib/simulation/genome';
 
 interface RadiationBurst {
   x: number;
@@ -58,6 +61,12 @@ export default function Home() {
   // HUD notification for adaptive radiation
   const [radiationNotification, setRadiationNotification] = useState<string | null>(null);
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Creature Genesis Lab state
+  const [genesisOpen, setGenesisOpen] = useState(false);
+  const [injectionAnimations, setInjectionAnimations] = useState<InjectionAnimation[]>([]);
+  const [designedCreatureTimestamps, setDesignedCreatureTimestamps] = useState<Map<string, number>>(new Map());
+  const [highlightBiomeType, setHighlightBiomeType] = useState<number | null>(null);
 
   function handleExtinctionEvent() {
     triggerExtinction();
@@ -125,6 +134,93 @@ export default function Home() {
     notifTimerRef.current = setTimeout(() => setRadiationNotification(null), 4000);
   }, [worldRef, notifTimerRef]);
 
+  // Find biome cells and pick a random position in a given biome
+  function findPositionInBiome(bestBiomeId: number, biomeGrid: Uint8Array): { x: number; y: number } {
+    const cells: Array<{ x: number; y: number }> = [];
+    for (let gy = 0; gy < GRID_ROWS; gy++) {
+      for (let gx = 0; gx < GRID_COLS; gx++) {
+        if (biomeGrid[gy * GRID_COLS + gx] === bestBiomeId) {
+          cells.push({ x: (gx + 0.5) * CELL_SIZE, y: (gy + 0.5) * CELL_SIZE });
+        }
+      }
+    }
+    if (cells.length > 0) {
+      return cells[Math.floor(Math.random() * cells.length)];
+    }
+    const world = worldRef.current!;
+    return { x: Math.random() * world.width, y: Math.random() * world.height };
+  }
+
+  function findHighestCompatibilityBiome(genes: number[], biomeGrid: Uint8Array): number {
+    let best = 0;
+    let bestScore = -1;
+    for (let b = 0; b < BIOME_COUNT; b++) {
+      const biome = BIOMES[b];
+      const speed = genes[0];
+      const size  = genes[1];
+      const camo  = genes[7];
+      const speedScore = Math.min(1, (speed * 0.8 + 0.2) / biome.move_cost);
+      const camoScore  = Math.min(1, 0.35 + camo * biome.camo_advantage * 0.65);
+      const foodScore  = Math.min(1, biome.food / (0.3 + size * 0.7));
+      const score = (speedScore + camoScore + foodScore) / 3;
+      if (score > bestScore) {
+        bestScore = score;
+        best = b;
+      }
+    }
+    // If no cells of that biome exist in the grid, fall back to savanna (0)
+    let hasCells = false;
+    for (let i = 0; i < biomeGrid.length; i++) {
+      if (biomeGrid[i] === best) { hasCells = true; break; }
+    }
+    return hasCells ? best : 0;
+  }
+
+  function handleInjectCreature(genome: Float32Array) {
+    const world = worldRef.current;
+    if (!world) return;
+
+    const genesArr = Array.from(genome);
+    const bestBiomeId = findHighestCompatibilityBiome(genesArr, world.biomeGrid);
+    const targetPos = findPositionInBiome(bestBiomeId, world.biomeGrid);
+
+    // Meteor starts from the top edge at a random x
+    const meteorStartX = 100 + Math.random() * (world.width - 200);
+    const meteorStartY = 15;
+
+    const anim: InjectionAnimation = {
+      startX: meteorStartX,
+      startY: meteorStartY,
+      targetX: targetPos.x,
+      targetY: targetPos.y,
+      startTime: Date.now(),
+    };
+
+    setInjectionAnimations(prev => [
+      ...prev.filter(a => Date.now() - a.startTime < 2000),
+      anim,
+    ]);
+
+    // Inject creature after animation (1500ms), then show burst
+    setTimeout(() => {
+      const creature = world.injectCreature(genome, targetPos);
+      setDesignedCreatureTimestamps(prev => {
+        const next = new Map(prev);
+        next.set(creature.id, Date.now());
+        return next;
+      });
+      // Radial burst at landing
+      const burst = {
+        x: targetPos.x,
+        y: targetPos.y,
+        startTime: Date.now(),
+        biomeType: bestBiomeId,
+        colors: [getColor(genome), 'rgba(100,255,200,0.6)'],
+      };
+      setRadiationBursts(prev => [...prev.filter(b => Date.now() - b.startTime < 2000), burst]);
+    }, 1500);
+  }
+
   // Handle adaptive radiation events
   useEffect(() => {
     if (adaptiveRadiationEvents.length === 0) return;
@@ -160,6 +256,9 @@ export default function Home() {
             brushSize={brushSize}
             showMigrationFlow={showMigrationFlow}
             radiationBursts={radiationBursts}
+            injectionAnimations={injectionAnimations}
+            designedCreatureTimestamps={designedCreatureTimestamps}
+            highlightBiomeType={highlightBiomeType}
           />
 
           {/* Biome Painter toolbar */}
@@ -223,6 +322,17 @@ export default function Home() {
             </div>
           )}
 
+          {/* Creature Genesis Lab panel */}
+          {genesisOpen && (
+            <div className="absolute right-2 top-2 z-30" style={{ maxHeight: 'calc(100% - 16px)', overflowY: 'auto' }}>
+              <CreatureGenesis
+                onClose={() => setGenesisOpen(false)}
+                onRelease={handleInjectCreature}
+                onBiomeHover={setHighlightBiomeType}
+              />
+            </div>
+          )}
+
           {/* Active biome indicator */}
           {selectedBiome !== null && (
             <div className="absolute top-3 right-3 bg-black/70 border border-gray-600 rounded-lg px-3 py-1.5 text-xs font-mono text-gray-300 pointer-events-none">
@@ -270,6 +380,8 @@ export default function Home() {
           onSetFoodAbundance={setFoodAbundance}
           onExtinctionEvent={handleExtinctionEvent}
           onRestart={restart}
+          onCreateToggle={() => setGenesisOpen(v => !v)}
+          genesisOpen={genesisOpen}
         />
       </div>
     </div>

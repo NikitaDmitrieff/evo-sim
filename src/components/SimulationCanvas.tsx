@@ -19,6 +19,14 @@ interface RadiationBurst {
   colors: string[];
 }
 
+export interface InjectionAnimation {
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  startTime: number;
+}
+
 interface SimulationCanvasProps {
   worldRef: React.RefObject<World | null>;
   selectedSpeciesId: string | null;
@@ -27,6 +35,9 @@ interface SimulationCanvasProps {
   brushSize: number;
   showMigrationFlow: boolean;
   radiationBursts: RadiationBurst[];
+  injectionAnimations?: InjectionAnimation[];
+  designedCreatureTimestamps?: Map<string, number>;
+  highlightBiomeType?: number | null;
 }
 
 function drawBiomeTile(
@@ -212,6 +223,103 @@ function drawMigrationFlow(
   }
 }
 
+function drawBiomeHighlight(
+  ctx: CanvasRenderingContext2D,
+  biomeGrid: Uint8Array,
+  biomeType: number
+) {
+  ctx.fillStyle = 'rgba(255, 255, 120, 0.14)';
+  for (let gy = 0; gy < GRID_ROWS; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      if (biomeGrid[gy * GRID_COLS + gx] === biomeType) {
+        ctx.fillRect(gx * CELL_SIZE, gy * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+      }
+    }
+  }
+  // Pulsing border on matched cells
+  ctx.strokeStyle = 'rgba(255,255,80,0.28)';
+  ctx.lineWidth = 1;
+  for (let gy = 0; gy < GRID_ROWS; gy++) {
+    for (let gx = 0; gx < GRID_COLS; gx++) {
+      if (biomeGrid[gy * GRID_COLS + gx] === biomeType) {
+        const px = gx * CELL_SIZE;
+        const py = gy * CELL_SIZE;
+        const hasN = gy === 0 || biomeGrid[(gy - 1) * GRID_COLS + gx] !== biomeType;
+        const hasS = gy === GRID_ROWS - 1 || biomeGrid[(gy + 1) * GRID_COLS + gx] !== biomeType;
+        const hasW = gx === 0 || biomeGrid[gy * GRID_COLS + gx - 1] !== biomeType;
+        const hasE = gx === GRID_COLS - 1 || biomeGrid[gy * GRID_COLS + gx + 1] !== biomeType;
+        ctx.beginPath();
+        if (hasN) { ctx.moveTo(px, py); ctx.lineTo(px + CELL_SIZE, py); }
+        if (hasS) { ctx.moveTo(px, py + CELL_SIZE); ctx.lineTo(px + CELL_SIZE, py + CELL_SIZE); }
+        if (hasW) { ctx.moveTo(px, py); ctx.lineTo(px, py + CELL_SIZE); }
+        if (hasE) { ctx.moveTo(px + CELL_SIZE, py); ctx.lineTo(px + CELL_SIZE, py + CELL_SIZE); }
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function drawInjectionAnimations(
+  ctx: CanvasRenderingContext2D,
+  animations: InjectionAnimation[],
+  now: number
+) {
+  const DURATION = 1500;
+  for (const anim of animations) {
+    const elapsed = now - anim.startTime;
+    if (elapsed > DURATION) continue;
+    const t = elapsed / DURATION;
+
+    // Ease-in-out quad
+    const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+    const x = anim.startX + (anim.targetX - anim.startX) * ease;
+    const y = anim.startY + (anim.targetY - anim.startY) * ease;
+
+    const dx = anim.targetX - anim.startX;
+    const dy = anim.targetY - anim.startY;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ndx = dx / dist;
+    const ndy = dy / dist;
+
+    const trailLen = 50 + t * 20;
+    const tx0 = x - ndx * trailLen;
+    const ty0 = y - ndy * trailLen;
+
+    ctx.save();
+
+    // Trail
+    const grad = ctx.createLinearGradient(tx0, ty0, x, y);
+    grad.addColorStop(0, 'rgba(255,200,50,0)');
+    grad.addColorStop(0.6, 'rgba(255,220,80,0.35)');
+    grad.addColorStop(1, 'rgba(255,245,150,0.85)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(tx0, ty0);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+
+    // Meteor head glow
+    ctx.shadowColor = 'rgba(255,220,50,0.9)';
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = 'rgba(255,255,220,0.95)';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Inner bright core
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x, y, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
 function drawRadiationBursts(
   ctx: CanvasRenderingContext2D,
   bursts: RadiationBurst[],
@@ -250,6 +358,9 @@ export function SimulationCanvas({
   brushSize,
   showMigrationFlow,
   radiationBursts,
+  injectionAnimations,
+  designedCreatureTimestamps,
+  highlightBiomeType,
 }: SimulationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -400,6 +511,11 @@ export function SimulationCanvas({
     // Draw biome layer
     drawBiomeLayer(ctx, world.biomeGrid, world.tick);
 
+    // Biome highlight overlay (from Genesis panel hover)
+    if (highlightBiomeType != null) {
+      drawBiomeHighlight(ctx, world.biomeGrid, highlightBiomeType);
+    }
+
     // Migration flow overlay
     if (showMigrationFlow) {
       drawMigrationFlow(ctx, world.biomeGrid, world.migrationLog);
@@ -476,6 +592,30 @@ export function SimulationCanvas({
         ctx.stroke();
       }
 
+      // Designed creature DNA marker (visible 10s)
+      if (designedCreatureTimestamps) {
+        const injectedAt = designedCreatureTimestamps.get(creature.id);
+        if (injectedAt !== undefined && nowRef.current - injectedAt < 10000) {
+          const age = nowRef.current - injectedAt;
+          const fadeAlpha = Math.max(0, 1 - age / 10000);
+          const pulseAlpha = fadeAlpha * (0.6 + Math.sin(age * 0.006) * 0.4);
+          ctx.strokeStyle = `rgba(100,255,200,${pulseAlpha.toFixed(2)})`;
+          ctx.lineWidth = 1.5;
+          ctx.shadowBlur = 0;
+          ctx.beginPath();
+          ctx.arc(x, y, creature.radius + 5, 0, Math.PI * 2);
+          ctx.stroke();
+          // DNA emoji above creature
+          const fontSize = Math.max(8, creature.radius * 0.9);
+          ctx.font = `${fontSize}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          ctx.globalAlpha = fadeAlpha * 0.9;
+          ctx.fillText('🧬', x, y - creature.radius - 3);
+          ctx.globalAlpha = 1;
+        }
+      }
+
       ctx.restore();
     }
 
@@ -484,8 +624,13 @@ export function SimulationCanvas({
       drawRadiationBursts(ctx, radiationBursts, nowRef.current);
     }
 
+    // Draw injection meteor animations
+    if (injectionAnimations && injectionAnimations.length > 0) {
+      drawInjectionAnimations(ctx, injectionAnimations, nowRef.current);
+    }
+
     ctx.restore();
-  }, [worldRef, selectedSpeciesId, extinctionFlash, showMigrationFlow, radiationBursts]);
+  }, [worldRef, selectedSpeciesId, extinctionFlash, showMigrationFlow, radiationBursts, injectionAnimations, designedCreatureTimestamps, highlightBiomeType]);
 
   // Attach draw to rAF
   useEffect(() => {

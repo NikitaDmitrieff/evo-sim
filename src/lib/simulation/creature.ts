@@ -65,6 +65,9 @@ export class Creature {
   biomeHistory: number[];
   biomeResidencyTicks: number;
 
+  // Designer tracking
+  isDesigned: boolean;
+
   constructor(
     genome: Genome,
     position: { x: number; y: number },
@@ -92,6 +95,7 @@ export class Creature {
 
     this.biomeHistory = [];
     this.biomeResidencyTicks = 0;
+    this.isDesigned = false;
   }
 
   update(world: WorldInterface): Creature | null {
@@ -288,6 +292,7 @@ export class Creature {
         this.id
       );
       child.speciesId = this.speciesId;
+      if (this.isDesigned) child.isDesigned = true;
       return child;
     }
 

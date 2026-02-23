@@ -77,3 +77,17 @@ export function getAggression(genome: Genome): number {
 export function getCamouflage(genome: Genome): number {
   return genome[7];
 }
+
+export interface GenomePreset {
+  name: string;
+  genome: Float32Array;
+}
+
+export const GENOME_PRESETS: GenomePreset[] = [
+  // [speed, size, vision, metabolism, hue, saturation, aggression, camouflage]
+  { name: 'Apex Predator',   genome: Float32Array.from([0.85, 0.80, 0.70, 0.50, 0.05, 0.90, 0.92, 0.10]) },
+  { name: 'Tiny Scavenger',  genome: Float32Array.from([0.75, 0.05, 0.85, 0.20, 0.45, 0.60, 0.05, 0.30]) },
+  { name: 'Ghost',           genome: Float32Array.from([0.45, 0.35, 0.50, 0.25, 0.55, 0.35, 0.08, 0.92]) },
+  { name: 'Marathon Runner', genome: Float32Array.from([0.95, 0.25, 0.60, 0.05, 0.30, 0.70, 0.15, 0.40]) },
+  { name: 'Armored Tank',    genome: Float32Array.from([0.10, 0.95, 0.35, 0.65, 0.85, 0.50, 0.78, 0.25]) },
+];

@@ -15,6 +15,8 @@ interface GodPanelProps {
   onSetFoodAbundance: (a: number) => void;
   onExtinctionEvent: () => void;
   onRestart: () => void;
+  onCreateToggle: () => void;
+  genesisOpen: boolean;
 }
 
 const SPEED_OPTIONS = [1, 5, 20] as const;
@@ -30,6 +32,8 @@ export function GodPanel({
   onSetFoodAbundance,
   onExtinctionEvent,
   onRestart,
+  onCreateToggle,
+  genesisOpen,
 }: GodPanelProps) {
   const [mutationRate, setMutationRate] = useState(0.02);
   const [foodAbundance, setFoodAbundance] = useState(1);
@@ -123,6 +127,18 @@ export function GodPanel({
           }`}
         >
           🌍 Biomes
+        </button>
+
+        {/* Create Creature toggle */}
+        <button
+          onClick={onCreateToggle}
+          className={`px-2 py-0.5 rounded border text-xs font-mono transition-colors shrink-0 ${
+            genesisOpen
+              ? 'bg-cyan-900 border-cyan-600 text-cyan-200'
+              : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-cyan-700 hover:text-cyan-400'
+          }`}
+        >
+          🧬 Create
         </button>
 
         <div className="w-px h-6 bg-gray-700 shrink-0" />
