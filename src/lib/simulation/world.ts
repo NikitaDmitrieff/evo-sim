@@ -1,5 +1,5 @@
 import { Creature, FoodPellet, WorldInterface } from './creature';
-import { createRandomGenome, geneticDistance } from './genome';
+import { createRandomGenome, geneticDistance, Genome } from './genome';
 import {
   BIOMES,
   BIOME_COUNT,
@@ -446,7 +446,8 @@ export class World implements WorldInterface {
         const h = rep.genome[4] * 360;
         const s = 50 + rep.genome[5] * 40;
         const color = `hsl(${h.toFixed(0)}, ${s.toFixed(0)}%, 45%)`;
-        const label = generateSpeciesLabel(newSpeciesId);
+        const isDesignedLineage = arr.some(c => c.isDesigned);
+        const label = (isDesignedLineage ? '⚗️ ' : '') + generateSpeciesLabel(newSpeciesId);
 
         this.speciesColors.set(newSpeciesId, color);
         this.speciesLabels.set(newSpeciesId, label);
@@ -489,6 +490,15 @@ export class World implements WorldInterface {
         this.extinctionHistory.push({ tick: this.tick, speciesId });
       }
     }
+  }
+
+  injectCreature(genome: Genome, position: { x: number; y: number }): Creature {
+    const creature = new Creature(genome, position);
+    creature.speciesId = 'primordial';
+    creature.energy = 60;
+    creature.isDesigned = true;
+    this.creatures.set(creature.id, creature);
+    return creature;
   }
 
   triggerExtinctionEvent() {
