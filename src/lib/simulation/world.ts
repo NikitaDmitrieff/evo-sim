@@ -208,7 +208,10 @@ export class World implements WorldInterface {
           : 0;
 
       const child = creature.update(this);
-      if (child) newCreatures.push(child);
+      if (child) {
+        child.birthTick = this.tick;
+        newCreatures.push(child);
+      }
 
       if (!creature.dead) {
         const newBiomeId =
@@ -497,6 +500,7 @@ export class World implements WorldInterface {
     creature.speciesId = 'primordial';
     creature.energy = 60;
     creature.isDesigned = true;
+    creature.birthTick = this.tick;
     this.creatures.set(creature.id, creature);
     return creature;
   }
