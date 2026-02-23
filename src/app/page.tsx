@@ -7,8 +7,10 @@ import { PhyloTree } from '../components/PhyloTree';
 import { GodPanel } from '../components/GodPanel';
 import { useSoundscape } from '../hooks/useSoundscape';
 import { AudioPanel } from '../components/AudioPanel';
+import { LandingPage } from '../components/LandingPage';
 
 export default function Home() {
+  const [showLanding, setShowLanding] = useState(true);
   const {
     worldRef,
     stats,
@@ -58,6 +60,8 @@ export default function Home() {
   }, [speciationEvents.length, worldRef]);
 
   return (
+    <>
+      {showLanding && <LandingPage onEnter={() => setShowLanding(false)} />}
     <div className="flex flex-col w-screen h-screen bg-[#0d1117] overflow-hidden">
       <AudioPanel controls={soundscapeControls} />
       {/* Main panels */}
@@ -151,5 +155,6 @@ export default function Home() {
         />
       </div>
     </div>
+    </>
   );
 }
