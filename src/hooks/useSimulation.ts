@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useEffect, useState, useCallback } from 'react';
-import { World, SpeciationEvent } from '../lib/simulation/world';
+import { World, SpeciationEvent, AdaptiveRadiationEvent } from '../lib/simulation/world';
 
 export interface SimStats {
   population: number;
@@ -38,6 +38,7 @@ export function useSimulation() {
   });
 
   const [speciationEvents, setSpeciationEvents] = useState<SpeciationEvent[]>([]);
+  const [adaptiveRadiationEvents, setAdaptiveRadiationEvents] = useState<AdaptiveRadiationEvent[]>([]);
   const [isPaused, setIsPaused] = useState(false);
   const [speed, setSpeedState] = useState(1);
 
@@ -46,14 +47,19 @@ export function useSimulation() {
     const world = new World();
     worldRef.current = world;
 
-    const unsub = world.onSpeciation((event) => {
+    const unsubSpeciation = world.onSpeciation((event) => {
       setSpeciationEvents((prev) => [...prev, event]);
+    });
+
+    const unsubRadiation = world.onAdaptiveRadiation((event) => {
+      setAdaptiveRadiationEvents((prev) => [...prev, event]);
     });
 
     world.initialize();
 
     return () => {
-      unsub();
+      unsubSpeciation();
+      unsubRadiation();
     };
   }, []);
 
@@ -71,7 +77,6 @@ export function useSimulation() {
           world.advance();
         }
 
-        // FPS tracking
         const fc = fpsCounterRef.current;
         fc.frames++;
         if (timestamp - fc.time >= 1000) {
@@ -80,7 +85,6 @@ export function useSimulation() {
           fc.time = timestamp;
         }
 
-        // Update stats every ~10 frames
         if (timestamp - lastTimeRef.current > 100) {
           lastTimeRef.current = timestamp;
           const s = world.getStats();
@@ -107,6 +111,7 @@ export function useSimulation() {
     if (!world) return;
     world.initialize();
     setSpeciationEvents([]);
+    setAdaptiveRadiationEvents([]);
     setStats({
       population: 0,
       predatorCount: 0,
@@ -147,6 +152,7 @@ export function useSimulation() {
     worldRef,
     stats,
     speciationEvents,
+    adaptiveRadiationEvents,
     isPaused,
     speed,
     restart,

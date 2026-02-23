@@ -9,6 +9,7 @@ import {
   getAggression,
   getCamouflage,
 } from './genome';
+import { BiomeProperties, CELL_SIZE } from './biome';
 
 let idCounter = 0;
 
@@ -37,6 +38,8 @@ export interface WorldInterface {
     callback: (energy: number) => void
   ): void;
   spawnFoodAt(x: number, y: number, energy: number): void;
+  getBiomeId(gridX: number, gridY: number): number;
+  getBiome(gridX: number, gridY: number): BiomeProperties;
 }
 
 export class Creature {
@@ -57,6 +60,10 @@ export class Creature {
   metabolicRate: number;
   aggression: number;
   camouflage: number;
+
+  // Biome tracking
+  biomeHistory: number[];
+  biomeResidencyTicks: number;
 
   constructor(
     genome: Genome,
@@ -82,6 +89,9 @@ export class Creature {
     this.metabolicRate = getMetabolicRate(genome);
     this.aggression = getAggression(genome);
     this.camouflage = getCamouflage(genome);
+
+    this.biomeHistory = [];
+    this.biomeResidencyTicks = 0;
   }
 
   update(world: WorldInterface): Creature | null {
@@ -89,12 +99,21 @@ export class Creature {
 
     this.age++;
 
+    // Look up current biome and apply modifiers
+    const gridX = Math.floor(this.position.x / CELL_SIZE);
+    const gridY = Math.floor(this.position.y / CELL_SIZE);
+    const biome = world.getBiome(gridX, gridY);
+
+    const effectiveVisionRadius = this.visionRadius * biome.visibility_mod;
+    const effectiveSpeed = this.speed * (1 / biome.move_cost);
+    const effectiveCamouflage = this.camouflage * biome.camo_advantage;
+
     const nearby = world.getCreaturesInRadius(
       this.position,
-      this.visionRadius,
+      effectiveVisionRadius,
       this.id
     );
-    const food = world.getFoodInRadius(this.position, this.visionRadius);
+    const food = world.getFoodInRadius(this.position, effectiveVisionRadius);
 
     // Determine movement target
     const threats = nearby.filter(
@@ -115,14 +134,14 @@ export class Creature {
       const dx = this.position.x - threat.position.x;
       const dy = this.position.y - threat.position.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      this.velocity.dx = (dx / dist) * this.speed;
-      this.velocity.dy = (dy / dist) * this.speed;
+      this.velocity.dx = (dx / dist) * effectiveSpeed;
+      this.velocity.dy = (dy / dist) * effectiveSpeed;
     } else if (this.aggression > 0.6 && nearby.length > 0) {
       // Predatory behavior: hunt smaller creatures
       const visiblePrey = nearby.filter(
         (c) =>
           c.radius < this.radius * 1.2 &&
-          Math.random() > c.camouflage * 0.5
+          Math.random() > effectiveCamouflage * 0.5
       );
       if (visiblePrey.length > 0) {
         const prey = visiblePrey.reduce((closest, c) => {
@@ -137,8 +156,8 @@ export class Creature {
         const dx = prey.position.x - this.position.x;
         const dy = prey.position.y - this.position.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        this.velocity.dx = (dx / dist) * this.speed;
-        this.velocity.dy = (dy / dist) * this.speed;
+        this.velocity.dx = (dx / dist) * effectiveSpeed;
+        this.velocity.dy = (dy / dist) * effectiveSpeed;
 
         // Attack on contact
         if (dist < this.radius + prey.radius + 2) {
@@ -152,9 +171,9 @@ export class Creature {
           }
         }
       } else if (food.length > 0) {
-        this.steerToward(food[0].x, food[0].y);
+        this.steerToward(food[0].x, food[0].y, effectiveSpeed);
       } else {
-        this.wander();
+        this.wander(effectiveSpeed);
       }
     } else if (food.length > 0) {
       // Seek nearest food
@@ -166,9 +185,9 @@ export class Creature {
           (closest.y - this.position.y) ** 2;
         return d1 < d2 ? f : closest;
       });
-      this.steerToward(nearest.x, nearest.y);
+      this.steerToward(nearest.x, nearest.y, effectiveSpeed);
     } else {
-      this.wander();
+      this.wander(effectiveSpeed);
     }
 
     // Move
@@ -195,18 +214,34 @@ export class Creature {
       this.velocity.dy *= -1;
     }
 
+    // Update biome history after moving
+    const newGridX = Math.floor(this.position.x / CELL_SIZE);
+    const newGridY = Math.floor(this.position.y / CELL_SIZE);
+    const currentBiomeId = world.getBiomeId(newGridX, newGridY);
+    const lastBiomeId =
+      this.biomeHistory.length > 0
+        ? this.biomeHistory[this.biomeHistory.length - 1]
+        : -1;
+    if (currentBiomeId !== lastBiomeId) {
+      this.biomeHistory.push(currentBiomeId);
+      if (this.biomeHistory.length > 5) this.biomeHistory.shift();
+      this.biomeResidencyTicks = 0;
+    } else {
+      this.biomeResidencyTicks++;
+    }
+
     // Consume food pellets
     world.consumeFoodAt(this.position, this.radius + 2, (energy) => {
       this.energy = Math.min(100, this.energy + energy);
     });
 
-    // Metabolic cost
-    const cost =
+    // Metabolic cost scaled by biome move_cost
+    const baseCost =
       0.05 +
       this.metabolicRate * 0.08 +
       (this.radius / 14) * 0.04 +
       (this.speed / 5) * 0.04;
-    this.energy -= cost;
+    this.energy -= baseCost * biome.move_cost;
 
     if (this.energy <= 0) {
       this.dead = true;
@@ -259,20 +294,20 @@ export class Creature {
     return null;
   }
 
-  private steerToward(tx: number, ty: number) {
+  private steerToward(tx: number, ty: number, spd: number) {
     const dx = tx - this.position.x;
     const dy = ty - this.position.y;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    this.velocity.dx = (dx / dist) * this.speed;
-    this.velocity.dy = (dy / dist) * this.speed;
+    this.velocity.dx = (dx / dist) * spd;
+    this.velocity.dy = (dy / dist) * spd;
   }
 
-  private wander() {
+  private wander(spd: number) {
     this.velocity.dx += (Math.random() - 0.5) * 0.4;
     this.velocity.dy += (Math.random() - 0.5) * 0.4;
     const mag =
       Math.sqrt(this.velocity.dx ** 2 + this.velocity.dy ** 2) || 1;
-    this.velocity.dx = (this.velocity.dx / mag) * this.speed;
-    this.velocity.dy = (this.velocity.dy / mag) * this.speed;
+    this.velocity.dx = (this.velocity.dx / mag) * spd;
+    this.velocity.dy = (this.velocity.dy / mag) * spd;
   }
 }

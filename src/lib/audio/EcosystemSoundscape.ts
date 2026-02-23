@@ -281,8 +281,8 @@ export class EcosystemSoundscape {
         voice.fadingOut = true;
         voice.envGain.gain.setTargetAtTime(0, now, 1.5);
         const stopAt = now + 6;
-        try { voice.osc.stop(stopAt); } catch (_) { /* already stopped */ }
-        try { voice.harmonyOsc.stop(stopAt); } catch (_) { /* already stopped */ }
+        try { voice.osc.stop(stopAt); } catch { /* already stopped */ }
+        try { voice.harmonyOsc.stop(stopAt); } catch { /* already stopped */ }
         setTimeout(() => { this.voiceMap.delete(sid); }, 6500);
       }
     }
@@ -488,11 +488,11 @@ export class EcosystemSoundscape {
 
   destroy(): void {
     for (const voice of this.voiceMap.values()) {
-      try { voice.osc.stop(); } catch (_) { /* already stopped */ }
-      try { voice.harmonyOsc.stop(); } catch (_) { /* already stopped */ }
+      try { voice.osc.stop(); } catch { /* already stopped */ }
+      try { voice.harmonyOsc.stop(); } catch { /* already stopped */ }
     }
     this.voiceMap.clear();
-    try { this.pulseOsc.stop(); } catch (_) { /* already stopped */ }
+    try { this.pulseOsc.stop(); } catch { /* already stopped */ }
     this.ctx?.close().catch(() => {});
     this.ctx = null;
     this._initialized = false;
